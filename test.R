@@ -312,7 +312,8 @@ ggplot(volcano_data, aes(x = logFC, y = -log10(adj.P.Val))) +
   #xlab = "log2 Fold Change", 
   #ylab = "-log10(Adjusted P-value)",
   #main = "Volcano Plot (Base R)"
-)
+#)
+
 #abline(h = -log10(0.05), v = c(-1, 1), lty = 2)
 
 
