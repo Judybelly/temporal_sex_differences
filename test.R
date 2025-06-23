@@ -59,6 +59,46 @@ fit <- eBayes(fit)
 topTable(fit, coef = 2)  # Extract DEGs
 
 
+#========Compare Male vs Female at each timpoints========
+# First, let's check your actual sample count
+total_samples <- length(colnames(counts))  # Should be 92
+
+# Create metadata with proper lengths
+metadata <- data.frame(
+  Sample = colnames(counts),
+  Sex = rep(c("Male", "Female"), each = 46),
+  Timepoint = c(
+    rep(c(0, 3, 6, 9, 12, 15, 18, 21), length.out = 46),  # Male timepoints
+    rep(c(0, 3, 6, 9, 12, 15, 18, 21), length.out = 46)   # Female timepoints
+  ),
+  row.names = colnames(counts)
+)
+
+# Verify
+dim(metadata)  # Should show 92 rows, 3 columns
+table(metadata$Sex, metadata$Timepoint)
+
+
+# Create DGEList
+dge <- DGEList(counts = counts, 
+               group = interaction(metadata$Sex, metadata$Timepoint))
+
+# Filter low-expressed genes (keep genes with ≥1 CPM in ≥3 samples)
+keep <- filterByExpr(dge, group = dge$samples$group)
+dge <- dge[keep, , keep.lib.sizes = FALSE]
+dge <- calcNormFactors(dge)  # TMM normalization
+
+# Design matrix (account for Sex + Timepoint + Sex:Timepoint interaction)
+# Create a more robust design matrix
+design <- model.matrix(~ 0 + Sex + Timepoint + Sex:Timepoint, data = metadata)
+colnames(design) <- gsub(":", ".", colnames(design))  # Replace : with .
+
+# Fit the model
+fit <- lmFit(v, design)
+fit <- eBayes(fit)
+
+
+
 ##=========GENERATE PLOTS===================
 
 
