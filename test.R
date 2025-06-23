@@ -49,42 +49,15 @@ legend("topright",
        title = "Sex")
 
 # Convert counts to VOOM-transformed values
-design <- model.matrix(~ group)  # Replace 'group' with your experimental factor
-v <- voom(d0, design, plot = TRUE)  # The 'plot=TRUE' generates the voom plot
-
-# Fit the model
-fit <- glmQLFit(d0, design, robust = TRUE)
-
-#==========================================
-# 1. Create metadata 
-metadata <- data.frame(
-  sample = colnames(d0),
-  sex = factor(ifelse(grepl("^A", colnames(d0)), "Male", "Female")),
-  timepoint = factor(gsub("[A-Z]", "", colnames(d0))),
-  stringsAsFactors = FALSE
-)
-
-# Add group column separately
-metadata$group <- factor(paste0("group", metadata$sex, "_", metadata$timepoint))
-
-# 2. Filter and normalize
-keep <- filterByExpr(d0, group = metadata$group)
-d0 <- d0[keep, , keep.lib.sizes = FALSE]
+# Full edgeR + voom pipeline
 d0 <- calcNormFactors(d0, method = "TMM")
+design <- model.matrix(~ group)
+v <- voom(d0, design, plot = TRUE)  # Generates voom plot
 
-# 3. Create design matrix
-design <- model.matrix(~0 + group, data = metadata)
-colnames(design) <- gsub("group", "", colnames(design))  # Clean column names
+fit <- lmFit(v, design)
+fit <- eBayes(fit)
+topTable(fit, coef = 2)  # Extract DEGs
 
-
-# If you can combine some timepoints biologically:
-metadata$period <- ifelse(metadata$timepoint %in% 1:10, "early", "late")
-design <- model.matrix(~sex * period, data = metadata)
-
-# MA plot for a timepoint
-plot(rowMeans(logCPM), timepoint_results[["1"]]$logFC, 
-     main = "MA Plot (Timepoint 1)",
-     xlab = "Average expression", ylab = "logFC (Male/Female)")
 
 ##=========GENERATE PLOTS===================
 
