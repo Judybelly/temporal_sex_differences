@@ -295,7 +295,93 @@ ggsave("volcano_with_labels_clean.png", plot = volcano_clean, width = 10, height
 
 
 
+##================
+# Extract normalized log2 counts (from voom/limma)
+norm_counts <- v$E  # or: cpm(dge, log=TRUE) for edgeR
 
+# Get significant DEGs (FDR < 0.05 and |logFC| > 1)
+sig_genes <- results[results$adj.P.Val < 0.05 & abs(results$logFC) > 1, ]
+sig_counts <- norm_counts[rownames(sig_genes), ]
+
+# Convert to Z-scores (optional, for better contrast)
+sig_z <- t(scale(t(sig_counts)))
+
+#-------Create the Heatmap-----------
+# Get top 20 most significant DEGs (adjust as needed)
+top_genes <- results %>%
+  arrange(P.Value) %>%        # Sort by significance
+  head(20) %>%               # Select top N genes
+  rownames()                 # Get gene IDs
+
+# Subset normalized counts
+heatmap_data <- norm_counts[top_genes, ]
+
+
+# Add gene names (if you converted them earlier)
+rownames(heatmap_data) <- results[top_genes, "gene_name"]
+
+library(pheatmap)
+
+# Order samples by sex
+sample_order <- order(metadata$Sex)
+heatmap_data <- heatmap_data[, sample_order]
+
+# Add sex labels
+annotation_col <- data.frame(
+  Sex = metadata$Sex[sample_order],
+  row.names = colnames(heatmap_data)
+)
+
+# Define your preferred colors
+sex_colors <- list(
+  Sex = c(Male = "blue", Female = "pink")  # Reversed from default
+)
+
+pheatmap(heatmap_data,
+         annotation_col = annotation_col,
+         annotation_colors = sex_colors,  # Add this line
+         show_colnames = FALSE,
+         cluster_cols = FALSE,
+         gaps_col = cumsum(table(metadata$Sex)),
+         main = "Top 20 DEGs by Sex")
+
+
+#--------------------------------------------------------------
+# Order samples by timepoint THEN sex
+sample_order <- order(metadata$Timepoint, metadata$Sex)
+heatmap_data <- heatmap_data[, sample_order]  # Reorder matrix
+
+# Create annotation data frame
+annotation_col <- data.frame(
+  Sex = metadata$Sex[sample_order],
+  Timepoint = metadata$Timepoint[sample_order],
+  row.names = colnames(heatmap_data)
+)
+
+# Define colors
+annotation_colors <- list(
+  Sex = c(Male = "blue", Female = "pink"),
+  Timepoint = c("0" = "#F7F7F7", 
+                "3" = "#D9D9D9", 
+                "6" = "#BDBDBD",
+                "9" = "#969696",
+                "12" = "#737373",
+                "15" = "#525252",
+                "18" = "#252525",  # Add all timepoints present in your data
+                "21" = "#000000")
+)
+
+pheatmap(heatmap_data,
+         annotation_col = annotation_col,
+         annotation_colors = annotation_colors,
+         show_colnames = FALSE,
+         cluster_cols = FALSE,  # Preserve timepoint/sex order
+         gaps_col = cumsum(table(interaction(metadata$Timepoint, metadata$Sex))),  # Group by timepoint+sex
+         main = "Top DEGs by Sex and Timepoint",
+         fontsize_row = 12)
+
+
+##================GO Enrichment Analysis=================
 
 
 
