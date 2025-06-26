@@ -63,7 +63,7 @@ stopifnot(identical(colnames(d), metadata$Sample))
 
 # Create design matrix - now with guaranteed alignment
 design <- model.matrix(~ Sex + Timepoint + Sex:Timepoint, data = metadata)
-rownames(design) <- metadata$Sample  # This MUST work now
+rownames(design) <- metadata$Sample
 
 # Final verification
 stopifnot(
@@ -294,7 +294,7 @@ ggsave("volcano_with_labels_clean.png", plot = volcano_clean, width = 10, height
 
 
 
-##================
+##==============================================================================
 # Extract normalized log2 counts (from voom/limma)
 norm_counts <- v$E  # or: cpm(dge, log=TRUE) for edgeR
 
@@ -309,8 +309,8 @@ sig_z <- t(scale(t(sig_counts)))
 # Get top 20 most significant DEGs (adjust as needed)
 top_genes <- results %>%
   arrange(P.Value) %>%        # Sort by significance
-  head(20) %>%               # Select top N genes
-  rownames()                 # Get gene IDs
+  head(20) %>%                # Select top N genes
+  rownames()                  # Get gene IDs
 
 # Subset normalized counts
 heatmap_data <- norm_counts[top_genes, ]
