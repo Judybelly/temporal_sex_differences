@@ -1,3 +1,16 @@
+#===============================================================================
+# DEG Analysis using limma/voom
+# Circadian Data
+
+#-------------------------------------------------------------------------------
+
+# To install packages use biocLite from bioconductor source
+# source("http://bioconductor.org/biocLite.R")
+# biocLite
+# install.packages("BiocUpgrade")
+# install.packages("Glimma")
+# biocLite("Glimma")
+
 ## Load library
 library(ggplot2)
 library(edgeR)
@@ -9,7 +22,12 @@ library(gtools)
 library(tidyverse)
 library(DESeq2)
 
-##===========Import Data==================
+#-------------------------------------------------------------------------------
+
+# Set working directory
+setwd("~/circadian_atlas/")
+
+##===========Import Data========================================================
 
 # Read raw count file
 counts <- read.delim("/Users/judyabuel/Desktop/Xist/circadian_atlas/GSE297702_circadian_atlas_rawcounts.txt", row.names = 1)
@@ -17,7 +35,7 @@ counts <- read.delim("/Users/judyabuel/Desktop/Xist/circadian_atlas/GSE297702_ci
 # Display the first few rows of the data frame
 head(counts)
 
-##===========Normalize & Filter Data==============
+##===========Create a DGEList===================================================
 
 d0 <- DGEList(counts)
 d0 <- calcNormFactors(d0, method = "TMM")
@@ -27,7 +45,7 @@ keep <- rowSums(cpm(d0) >= 1) >= 3  # Keep genes with CPM ≥1 in at least 3 sam
 d <- d0[keep, , keep.lib.sizes=FALSE]
 dim(d) # Check how many number of genes left
 
-##===========Create Proper Metadata============
+##===========Create Metadata============
 
 # Create new metadata with EXACTLY the samples in d
 metadata <- data.frame(
@@ -57,27 +75,10 @@ stopifnot(
 v <- voom(d, design, plot = TRUE)
 
 
-##==========Quality Control Plots=================
-# MDS Plot
-plotMDS(d0, 
-        col = as.numeric(group),  # Colors: 1=Male, 2=Female
-        pch = 16,                 # Solid circles
-        cex = 1.5,                 # Point size
-        main = "MDS Plot: Male vs Female",
-        xlab = "Dimension 1",
-        ylab = "Dimension 2")
-
-# Add a legend to my plot
-legend("topright", 
-       legend = levels(group), 
-       col = 1:2, 
-       pch = 16, 
-       title = "Sex")
-
-
 ##===========Create Exact Metadata============
 # Manually specify timepoints for ALL samples in EXACT order they appear in your data
 timepoints <- c(
+  
   # Male samples (A) - first 46 samples
   rep(0, 7),  # A1-A3, A25-A27,A3
   rep(3, 6),   # A28-A30,A4-A6
@@ -192,14 +193,12 @@ ggplot(mds_data, aes(Dim1, Dim2, color = Sex)) +
   )
 
 
-##============================================
 ##______Visualize DEGs between Male and Female________________
+
 design <- model.matrix(~ Sex, data = metadata)
 v <- voom(d, design, plot = TRUE)
 fit <- eBayes(lmFit(v, design))
 results <- topTable(fit, coef = "SexMale", number = Inf)
-
-
 
 # Ensure columns are numeric (fixes common errors)
 results$logFC <- as.numeric(results$logFC)
