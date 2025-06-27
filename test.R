@@ -25,7 +25,7 @@ library(DESeq2)
 #-------------------------------------------------------------------------------
 
 # Set working directory
-setwd("~/circadian_atlas/")
+setwd("/Users/judyabuel/Desktop/Xist/circadian_atlas")
 
 ##===========Import Data========================================================
 
@@ -34,6 +34,28 @@ counts <- read.delim("/Users/judyabuel/Desktop/Xist/circadian_atlas/GSE297702_ci
 
 # Display the first few rows of the data frame
 head(counts)
+
+
+##===========Create Metadata============
+# Read your metadata
+metadata <- read.csv("/Users/judyabuel/Desktop/Xist/circadian_atlas/wt_circadian_traits.csv")
+
+# Order metadata to match d exactly
+metadata <- metadata[order(metadata$Sample_ID), ]
+
+# Verify perfect alignment before proceeding
+stopifnot(identical(colnames(d), metadata$Sample_ID))
+
+# Create design matrix - now with guaranteed alignment
+design <- model.matrix(~ Sex + Timepoint + Sex:Timepoint, data = metadata)
+rownames(design) <- metadata$Sample_ID
+
+# Final verification
+stopifnot(
+  nrow(design) == ncol(d),
+  identical(rownames(design), colnames(d))
+)
+
 
 ##===========Create a DGEList===================================================
 
@@ -45,77 +67,14 @@ keep <- rowSums(cpm(d0) >= 1) >= 3  # Keep genes with CPM ≥1 in at least 3 sam
 d <- d0[keep, , keep.lib.sizes=FALSE]
 dim(d) # Check how many number of genes left
 
-##===========Create Metadata============
-
-# Create new metadata with EXACTLY the samples in d
-metadata <- data.frame(
-  Sample = colnames(d),
-  Sex = factor(ifelse(grepl("^A", colnames(d)), "Male", "Female")),
-  Timepoint = as.numeric(gsub("^A|^B", "", colnames(d))),
-  stringsAsFactors = FALSE
-)
-
-# Order metadata to match d exactly
-metadata <- metadata[order(metadata$Sample), ]
-
-# Verify perfect alignment before proceeding
-stopifnot(identical(colnames(d), metadata$Sample))
-
-# Create design matrix - now with guaranteed alignment
 design <- model.matrix(~ Sex + Timepoint + Sex:Timepoint, data = metadata)
-rownames(design) <- metadata$Sample
 
-# Final verification
-stopifnot(
-  nrow(design) == ncol(d),
-  identical(rownames(design), colnames(d))
-)
+v <- voom(d, design, plot = TRUE) # check the mean variance trend
 
-# Now run voom
-v <- voom(d, design, plot = TRUE)
+# Fit linear model
+fit <- lmFit(v, design) #standard limma pipeline
+fit <- eBayes(fit) #Empirical Bayes moderation
 
-
-##===========Create Exact Metadata============
-# Manually specify timepoints for ALL samples in EXACT order they appear in your data
-timepoints <- c(
-  
-  # Male samples (A) - first 46 samples
-  rep(0, 7),  # A1-A3, A25-A27,A3
-  rep(3, 6),   # A28-A30,A4-A6
-  rep(6, 6),   # A31-A33,A7-A9
-  rep(9, 6),   # A10-A12,A34-A36
-  rep(12, 6),  # A13-A15,A37-A39
-  rep(15, 6),  # A16-A18,A40-A42
-  rep(18, 5),  # A19-A21,A43-A44
-  rep(21, 4),  # A22-A24,A45-A46
-  
-  # Female samples (B) - next 46 samples
-  rep(0, 7),   # B1-B3,B25-B27,B3
-  rep(3, 6),    # B28-B30,B4-B6
-  rep(6, 6),    # B31-B33,B7-B9
-  rep(9, 6),    # B10-B12,B34-B36
-  rep(12, 6),   # B13-B15,B37-B39
-  rep(15, 6),   # B16-B18,B40-B42
-  rep(18, 5),   # B19-B21,B43-B44
-  rep(21, 4)    # B22-B24,B45-B46
-)
-
-# Create metadata - this CANNOT fail
-metadata <- data.frame(
-  Sample_ID = colnames(d),
-  Sample_Name = ifelse(
-    grepl("^A", colnames(d)),
-    paste0("ZT", sprintf("%02d", timepoints[1:ncol(d)]), "_", colnames(d)),
-    paste0("ZT", sprintf("%02d", timepoints[1:ncol(d)]), "_", colnames(d))
-  ),
-  Timepoint = factor(timepoints[1:ncol(d)], levels = c(0, 3, 6, 9, 12, 15, 18, 21)),
-  Sex = ifelse(grepl("^A", colnames(d)), "Male", "Female"),
-  stringsAsFactors = FALSE
-)
-
-# Verify
-head(metadata, 20)
-table(metadata$Sex, metadata$Timepoint)
 
 
 #============Generate MDS plot Sex:Timepoint===================
@@ -138,37 +97,9 @@ legend("topright",
 
 # Add legend for Timepoint
 legend("bottomright", 
-       legend = levels(metadata$Timepoint), 
-       pch = c(16, 17, 15, 18, 8, 9, 10, 12), 
+       legend = metadata$Timepoint, 
+       #pch = c(16, 17, 15, 18, 8, 9, 10, 12), 
        title = "Timepoint")
-
-
-
-
-# Convert MDS coordinates to data frame
-mds_data <- data.frame(
-  Dimension1 = mds$x,
-  Dimension2 = mds$y,
-  Sex = metadata$Sex,
-  Timepoint = metadata$Timepoint
-)
-
-# Create ggplot
-ggplot(mds_data, aes(x = Dimension1, y = Dimension2, color = Sex, shape = Timepoint)) +
-  geom_point(size = 3) +
-  scale_color_manual(values = c("Male" = "blue", "Female" = "pink")) +
-  scale_shape_manual(values = c(16, 17, 15, 18, 8, 9, 10, 12)) +
-  labs(title = "MDS Plot: Sex and Timepoint",
-       x = "Dimension 1",
-       y = "Dimension 2") +
-  theme_minimal() +  # Start with minimal theme
-  theme(
-    panel.grid.major = element_blank(),  # Remove major grid lines
-    panel.grid.minor = element_blank(),  # Remove minor grid lines
-    panel.background = element_blank(),  # Remove gray background
-    axis.line = element_line(color = "black")  # Keep axis lines
-  )
-
 
 #-------MDS PLOT between Sexes-------------
 
@@ -193,29 +124,41 @@ ggplot(mds_data, aes(Dim1, Dim2, color = Sex)) +
   )
 
 
-##______Visualize DEGs between Male and Female________________
+##========Make a contrast here==================================================
 
-design <- model.matrix(~ Sex, data = metadata)
-v <- voom(d, design, plot = TRUE)
+results_list <- list()
+
+for (tp in timepoints) {
+  # Subset data for this time point
+  idx <- metadata$Timepoint == tp
+  d_sub <- d[, idx]
+  metadata_sub <- metadata[idx, ]
+  
+  # Redesign for simple Male vs Female comparison
+  design_sub <- model.matrix(~ Sex, data = metadata_sub)
+  d_sub <- estimateDisp(d_sub, design_sub)
+  fit_sub <- glmQLFit(d_sub, design_sub)
+  
+  # Test Male vs Female (assumes "Male" is the numerator)
+  qlf <- glmQLFTest(fit_sub, coef = 2)  # coef=2 is "sex_Male"
+  res <- topTags(qlf, n = Inf)$table %>%
+    rownames_to_column("gene") %>%
+    mutate(timepoint = tp)
+  
+  results_list[[as.character(tp)]] <- res
+}
+
+all_results <- bind_rows(results_list)
+
+write.csv(all_results, "Male_vs_Female_by_timepoint_edgeR.csv", row.names = FALSE)
+
+
+# what are you comparing in your samples? Sex differences and timepoints
 fit <- eBayes(lmFit(v, design))
 results <- topTable(fit, coef = "SexMale", number = Inf)
 
-# Ensure columns are numeric (fixes common errors)
-results$logFC <- as.numeric(results$logFC)
-results$P.Value <- as.numeric(results$P.Value)
-results$adj.P.Val <- as.numeric(results$adj.P.Val)
-
-# Define significance thresholds
-sig_cutoff <- 0.01  # FDR cutoff
-fc_cutoff <- 2      # |logFC| cutoff
 
 
-
-
-
-# Define thresholds
-sig_cutoff <- 0.05  # FDR cutoff
-fc_cutoff <- 1      # Absolute logFC cutoff
 
 # Classify genes
 results <- results %>%
@@ -293,94 +236,9 @@ volcano_clean <- volcano_with_labels +
 ggsave("volcano_with_labels_clean.png", plot = volcano_clean, width = 10, height = 8, dpi = 300)
 
 
-
 ##==============================================================================
-# Extract normalized log2 counts (from voom/limma)
-norm_counts <- v$E  # or: cpm(dge, log=TRUE) for edgeR
-
-# Get significant DEGs (FDR < 0.05 and |logFC| > 1)
-sig_genes <- results[results$adj.P.Val < 0.05 & abs(results$logFC) > 1, ]
-sig_counts <- norm_counts[rownames(sig_genes), ]
-
-# Convert to Z-scores (optional, for better contrast)
-sig_z <- t(scale(t(sig_counts)))
-
-#-------Create the Heatmap-----------
-# Get top 20 most significant DEGs (adjust as needed)
-top_genes <- results %>%
-  arrange(P.Value) %>%        # Sort by significance
-  head(20) %>%                # Select top N genes
-  rownames()                  # Get gene IDs
-
-# Subset normalized counts
-heatmap_data <- norm_counts[top_genes, ]
 
 
-# Add gene names (if you converted them earlier)
-rownames(heatmap_data) <- results[top_genes, "gene_name"]
-
-library(pheatmap)
-
-# Order samples by sex
-sample_order <- order(metadata$Sex)
-heatmap_data <- heatmap_data[, sample_order]
-
-# Add sex labels
-annotation_col <- data.frame(
-  Sex = metadata$Sex[sample_order],
-  row.names = colnames(heatmap_data)
-)
-
-# Define your preferred colors
-sex_colors <- list(
-  Sex = c(Male = "blue", Female = "pink")  # Reversed from default
-)
-
-pheatmap(heatmap_data,
-         annotation_col = annotation_col,
-         annotation_colors = sex_colors,  # Add this line
-         show_colnames = FALSE,
-         cluster_cols = FALSE,
-         gaps_col = cumsum(table(metadata$Sex)),
-         main = "Top 20 DEGs by Sex")
-
-
-#--------------------------------------------------------------
-# Order samples by timepoint THEN sex
-sample_order <- order(metadata$Timepoint, metadata$Sex)
-heatmap_data <- heatmap_data[, sample_order]  # Reorder matrix
-
-# Create annotation data frame
-annotation_col <- data.frame(
-  Sex = metadata$Sex[sample_order],
-  Timepoint = metadata$Timepoint[sample_order],
-  row.names = colnames(heatmap_data)
-)
-
-# Define colors
-annotation_colors <- list(
-  Sex = c(Male = "blue", Female = "pink"),
-  Timepoint = c("0" = "#F7F7F7", 
-                "3" = "#D9D9D9", 
-                "6" = "#BDBDBD",
-                "9" = "#969696",
-                "12" = "#737373",
-                "15" = "#525252",
-                "18" = "#252525",  # Add all timepoints present in your data
-                "21" = "#000000")
-)
-
-pheatmap(heatmap_data,
-         annotation_col = annotation_col,
-         annotation_colors = annotation_colors,
-         show_colnames = FALSE,
-         cluster_cols = FALSE,  # Preserve timepoint/sex order
-         gaps_col = cumsum(table(interaction(metadata$Timepoint, metadata$Sex))),  # Group by timepoint+sex
-         main = "Top DEGs by Sex and Timepoint",
-         fontsize_row = 12)
-
-
-##================GO Enrichment Analysis=================
 
 
 
