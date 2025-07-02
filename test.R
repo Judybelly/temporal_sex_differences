@@ -154,9 +154,16 @@ gene_map <- getBM(
 #-------------------------------
 # Merge Gene Names Into Results
 #-------------------------------
+gene_map <- gene_map %>%
+  mutate(ensembl_gene_id = as.character(ensembl_gene_id))
+
 all_results <- lapply(all_results, function(df) {
+  if (!"gene" %in% colnames(df)) {
+    df <- df %>%
+      tibble::rownames_to_column(var = "gene")
+  }
+  
   df <- df %>%
-    tibble::rownames_to_column(var = "gene") %>%
     mutate(gene = sub("\\..*$", "", gene)) %>%
     left_join(gene_map, by = c("gene" = "ensembl_gene_id")) %>%
     rename(gene_symbol = external_gene_name)
@@ -166,9 +173,10 @@ all_results <- lapply(all_results, function(df) {
 #--------------------------
 # Generate Volcane Plot
 #--------------------------
-make_volcano_plot <- function(df, timepoint, logFC_cutoff = 1, adjP_cutoff = 0.05, max_labels = 20) {
+
+make_volcano_plot <- function(df, timepoint, adjP_cutoff = 0.05, logFC_cutoff = 1, max_labels = 20) {
   
-  # Define significance
+  # Determine significance based on standard thresholds
   df <- df %>%
     mutate(
       Significance = case_when(
@@ -179,16 +187,22 @@ make_volcano_plot <- function(df, timepoint, logFC_cutoff = 1, adjP_cutoff = 0.0
       gene_label = ifelse(is.na(gene_symbol) | gene_symbol == "", gene, gene_symbol)
     )
   
-  # Top genes to label
+  # Get top significant genes to label
   label_df <- df %>%
     filter(Significance != "Not Significant") %>%
     arrange(adj.P.Val) %>%
     head(max_labels)
   
-  # Create plot
+  # Volcano plot
   ggplot(df, aes(x = logFC, y = -log10(adj.P.Val), color = Significance)) +
     geom_point(alpha = 0.6) +
-    scale_color_manual(values = c("Upregulated" = "red", "Downregulated" = "blue", "Not Significant" = "grey70")) +
+    scale_color_manual(
+      values = c(
+        "Upregulated" = "red",
+        "Downregulated" = "blue",
+        "Not Significant" = "grey70"
+      )
+    ) +
     geom_vline(xintercept = c(-logFC_cutoff, logFC_cutoff), linetype = "dashed", color = "darkgrey") +
     geom_hline(yintercept = -log10(adjP_cutoff), linetype = "dashed", color = "darkgrey") +
     geom_text_repel(data = label_df, aes(label = gene_label), size = 3, max.overlaps = Inf) +
@@ -200,6 +214,30 @@ make_volcano_plot <- function(df, timepoint, logFC_cutoff = 1, adjP_cutoff = 0.0
     )
 }
 
+
+
+dir.create("volcano_plots", showWarnings = FALSE)
+
+for (tp in names(all_results)) {
+  df <- all_results[[tp]]
+  p <- make_volcano_plot(df, tp)
+  
+  ggsave(
+    filename = paste0("volcano_plots/1new_volcano_", tp, ".png"),
+    plot = p,
+    width = 8,
+    height = 6,
+    dpi = 300
+  )
+}
+
+
+
+
+
+
+
+
 #--------------------------
 # SAVE as PNG file
 #--------------------------
@@ -210,14 +248,13 @@ for (tp in names(all_results)) {
   p <- make_volcano_plot(df, tp)
   
   ggsave(
-    filename = paste0("volcano_plots/volcano_", tp, ".png"),
+    filename = paste0("volcano_plots/new_volcano_", tp, ".png"),
     plot = p,
     width = 8,
     height = 6,
     dpi = 300
   )
 }
-
 
 
   
