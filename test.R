@@ -1,450 +1,471 @@
 #===============================================================================
-# PURPOSE: DEG Analysis using limma/voom
+# PURPOSE: DEG Analysis
 # Circadian Data
+#===============================================================================
 
-#-------------------------------------------------------------------------------
-
-# To install packages use biocLite from bioconductor source
-# source("http://bioconductor.org/biocLite.R")
-# biocLite
-# install.packages("BiocUpgrade")
-# install.packages("Glimma")
-# biocLite("Glimma")
-
-## Load library
-library(ggplot2)
+# Load libraries
 library(edgeR)
 library(limma)
 library(dplyr)
-library(factoextra)
-library(FactoMineR)
-library(gtools)
 library(tidyverse)
-library(DESeq2)
-
-#-------------------------------------------------------------------------------
+library(biomaRt)
+library(ggplot2)
+library(EnhancedVolcano)
+library(ggrepel)
+library(tibble)
 
 # Set working directory
 setwd("/Users/judyabuel/Desktop/Xist/circadian_atlas")
 
 #===============================================================================
-#                        Import Data & Create Metadata
+# Load Data
 #===============================================================================
 
-# Read raw count file
-counts <- read.delim("/Users/judyabuel/Desktop/Xist/circadian_atlas/GSE297702_circadian_atlas_rawcounts.txt", row.names = 1)
-# Display the first few rows of the data frame
-head(counts)
+# Load count matrix
+counts <- read.delim("GSE297702_circadian_atlas_rawcounts.txt", row.names = 1)
 
+# Load metadata
+metadata <- read.csv("wt_circadian_traits.csv")
+metadata$Sex <- factor(metadata$Sex)
+metadata$Timepoint <- factor(metadata$Timepoint)
 
-# Read your metadata
-metadata <- read.csv("/Users/judyabuel/Desktop/Xist/circadian_atlas/wt_circadian_traits.csv")
-
+# Relevel to set Male and ZT0 as references
+metadata$Sex <- relevel(metadata$Sex, ref = "Male")
+metadata$Timepoint <- relevel(metadata$Timepoint, ref = "0")
+metadata$Timepoint <- factor(as.character(metadata$Timepoint))  # Ensure proper factor levels
 
 #===============================================================================
-#                              Create DGEList
+# Preprocessing
 #===============================================================================
 
-d0 <- DGEList(counts)
-d0 <- calcNormFactors(d0, method = "TMM")
+# Create DGEList object and normalize
+dge <- DGEList(counts)
+dge <- calcNormFactors(dge, method = "TMM")
 
-# Filter lowly expressed genes (edgeR way)
-keep <- rowSums(cpm(d0) >= 1) >= 3  # Keep genes with CPM ≥1 in at least 3 samples
-d <- d0[keep, , keep.lib.sizes=FALSE]
-dim(d) # Check how many number of genes left
+# Filter low-expressed genes
+keep <- rowSums(cpm(dge) >= 1) >= 3
+dge <- dge[keep, , keep.lib.sizes = FALSE]
 
-# design matrix
+# Create design matrix
 design <- model.matrix(~ Sex * Timepoint, data = metadata)
-colnames(design) # Checks Check if your design matrix matches expectations
+colnames(design) <- make.names(colnames(design))  # Clean column names
 
-# Proceed with voom and lmFit as before
-v <- voom(d, design, plot = TRUE)
+# Apply voom transformation and fit model
+v <- voom(dge, design, plot = TRUE)
 fit <- lmFit(v, design)
 fit <- eBayes(fit)
 
 
-#===============================================================================
-#                              Define Contrasts
-#===============================================================================
-
-coef_names <- colnames(fit$coefficients)
-all_results <- list()
-
-for (tp in c("00", "03", "06", "09", "12", "15", "18", "21")) {
-  model_coefs <- colnames(fit$coefficients)
-  contrast <- matrix(0, nrow = length(model_coefs), ncol = 1,
-                     dimnames = list(model_coefs, paste0("ZT", tp)))
-  
-  if (tp == "00") {
-    if ("SexMale" %in% model_coefs) {
-      contrast["SexMale", 1] <- -1  # male vs female at ZT00
-    } else {
-      warning("SexMale coefficient not found for ZT00")
-      next
-    }
-  } else {
-    interaction_term <- paste0("SexMale:Timepoint", tp)
-    if (all(c("SexMale", interaction_term) %in% model_coefs)) {
-      contrast["SexMale", 1] <- -1
-      contrast[interaction_term, 1] <- -1
-    } else {
-      warning(paste("Skipping ZT", tp, "- missing coefficient(s)"))
-      next
-    }
-  }
-  
-  # Fit the model with the contrast
-  fit2 <- contrasts.fit(fit, contrast)
-  fit2 <- eBayes(fit2)
-  
-  # Extract results with logFC included
-  results <- topTable(fit2, coef = 1, number = Inf)
-  results$Timepoint <- paste0("ZT", tp)
-  
-  all_results[[paste0("ZT", tp)]] <- results
-  
-  # Optional: print confirmation
-  cat("Results stored for ZT", tp, "\n")
-}
-
-
-# Combine all the differential expression results into one data freame
-combined_results <- do.call(rbind, all_results)
-
-
-# Let's save it!
-write.csv(combined_results, "DEG_Female_vs_Male_by_Timepoint.csv")
-
-
 
 #===============================================================================
-#                              Generate Plots
+# Define Contrasts
 #===============================================================================
 
-if (!requireNamespace("biomaRt", quietly = TRUE)) {
-  install.packages("BiocManager")
-  BiocManager::install("biomaRt")
-}
-library(biomaRt)
-library(dplyr)
-library(ggplot2)
-library(ggrepel)
-library(tibble)
+contrast.matrix <- makeContrasts(
+  Female_vs_Male_T3  = SexFemale + SexFemale.Timepoint3,
+  Female_vs_Male_T6  = SexFemale + SexFemale.Timepoint6,
+  Female_vs_Male_T9  = SexFemale + SexFemale.Timepoint9,
+  Female_vs_Male_T12 = SexFemale + SexFemale.Timepoint12,
+  Female_vs_Male_T15 = SexFemale + SexFemale.Timepoint15,
+  Female_vs_Male_T18 = SexFemale + SexFemale.Timepoint18,
+  Female_vs_Male_T21 = SexFemale + SexFemale.Timepoint21,
+  levels = design
+)
 
-#--------------------------
-# Map Gene Names
-#--------------------------
+fit2 <- contrasts.fit(fit, contrast.matrix)
+fit2 <- eBayes(fit2)
 
-# Connect to Ensembl for mouse
+#===============================================================================
+# Annotate Genes with MGI Symbols
+#===============================================================================
+
+# Get clean Ensembl IDs from DGE object
+ensembl_ids <- rownames(dge)
+ensembl_ids_clean <- sub("\\..*", "", ensembl_ids)
+
+# Connect to Ensembl
 ensembl <- useMart("ensembl", dataset = "mmusculus_gene_ensembl")
-
-# Get all unique gene IDs across your data
-all_gene_ids <- unique(unlist(lapply(all_results, rownames)))
-all_gene_ids <- sub("\\..*$", "", all_gene_ids)  # Remove version numbers like ".1"
-
-# Query gene symbols from Ensembl
 gene_map <- getBM(
-  attributes = c("ensembl_gene_id", "external_gene_name"),
+  attributes = c("ensembl_gene_id", "mgi_symbol"),
   filters = "ensembl_gene_id",
-  values = all_gene_ids,
+  values = ensembl_ids_clean,
   mart = ensembl
 )
 
-
-#-------------------------------
-# Merge Gene Names Into Results
-#-------------------------------
-gene_map <- gene_map %>%
-  mutate(ensembl_gene_id = as.character(ensembl_gene_id))
-
-all_results <- lapply(all_results, function(df) {
-  if (!"gene" %in% colnames(df)) {
-    df <- df %>%
-      tibble::rownames_to_column(var = "gene")
-  }
-  
-  df <- df %>%
-    mutate(gene = sub("\\..*$", "", gene)) %>%
-    left_join(gene_map, by = c("gene" = "ensembl_gene_id")) %>%
-    rename(gene_symbol = external_gene_name)
-})
-
-
-#--------------------------
-# Generate Volcane Plot
-#--------------------------
-
-make_volcano_plot <- function(df, timepoint, adjP_cutoff = 0.05, logFC_cutoff = 1, max_labels = 20) {
-  
-  # Determine significance based on standard thresholds
-  df <- df %>%
-    mutate(
-      Significance = case_when(
-        adj.P.Val < adjP_cutoff & logFC > logFC_cutoff  ~ "Upregulated",
-        adj.P.Val < adjP_cutoff & logFC < -logFC_cutoff ~ "Downregulated",
-        TRUE                                             ~ "Not Significant"
-      ),
-      gene_label = ifelse(is.na(gene_symbol) | gene_symbol == "", gene, gene_symbol)
-    )
-  
-  # Get top significant genes to label
-  label_df <- df %>%
-    filter(Significance != "Not Significant") %>%
-    arrange(adj.P.Val) %>%
-    head(max_labels)
-  
-  # Volcano plot
-  ggplot(df, aes(x = logFC, y = -log10(adj.P.Val), color = Significance)) +
-    geom_point(alpha = 0.6) +
-    scale_color_manual(
-      values = c(
-        "Upregulated" = "red",
-        "Downregulated" = "blue",
-        "Not Significant" = "grey70"
-      )
-    ) +
-    geom_vline(xintercept = c(-logFC_cutoff, logFC_cutoff), linetype = "dashed", color = "darkgrey") +
-    geom_hline(yintercept = -log10(adjP_cutoff), linetype = "dashed", color = "darkgrey") +
-    geom_text_repel(data = label_df, aes(label = gene_label), size = 3, max.overlaps = Inf) +
-    theme_minimal() +
-    labs(
-      title = paste("Volcano Plot -", timepoint),
-      x = "log2 Fold Change",
-      y = "-log10 Adjusted p-value"
-    )
-}
-
-
-
-dir.create("volcano_plots", showWarnings = FALSE)
-
-for (tp in names(all_results)) {
-  df <- all_results[[tp]]
-  p <- make_volcano_plot(df, tp)
-  
-  ggsave(
-    filename = paste0("volcano_plots/1new_volcano_", tp, ".png"),
-    plot = p,
-    width = 8,
-    height = 6,
-    dpi = 300
-  )
-}
-
-
-
-
-
-
-
-
-#--------------------------
-# SAVE as PNG file
-#--------------------------
-dir.create("volcano_plots", showWarnings = FALSE)
-
-for (tp in names(all_results)) {
-  df <- all_results[[tp]]
-  p <- make_volcano_plot(df, tp)
-  
-  ggsave(
-    filename = paste0("volcano_plots/new_volcano_", tp, ".png"),
-    plot = p,
-    width = 8,
-    height = 6,
-    dpi = 300
-  )
-}
-
-
-  
 #===============================================================================
-  ## HEATMAP: Top 15 DE Genes per Timepoint with Sex-specific Significance
+# Generate Volcano Plots for Each Timepoint
 #===============================================================================
 
+# Create output directories
+output_dir <- "New_volcano_plots"
+results_dir <- "deg_results"
+dir.create(output_dir, showWarnings = FALSE)
+dir.create(results_dir, showWarnings = FALSE)
+
+# Load required libraries
+library(ggplot2)
 library(dplyr)
-library(tidyr)
-library(pheatmap)
+library(ggrepel)
 
-#--------------------------
-# 1. Select Top Genes
-#--------------------------
 
-# Function to extract top 15 genes per timepoint
-extract_top_genes <- function(df, top_n = 15) {
-  df %>%
+# Loop over all contrasts
+for (contrast_name in colnames(contrast.matrix)) {
+  message("Processing ", contrast_name, "...")
+  
+  # Get DEG results
+  top_table <- topTable(fit2, coef = contrast_name, number = Inf, sort.by = "P")
+  top_table$ensembl_gene_id <- sub("\\..*", "", rownames(top_table))
+  top_table_annotated <- merge(top_table, gene_map, by = "ensembl_gene_id", all.x = TRUE)
+  
+  # Add fallback label
+  top_table_annotated$label <- ifelse(
+    is.na(top_table_annotated$mgi_symbol) | top_table_annotated$mgi_symbol == "",
+    top_table_annotated$ensembl_gene_id,
+    top_table_annotated$mgi_symbol
+  )
+  
+  # Classify expression status
+  top_table_annotated$Expression <- case_when(
+    top_table_annotated$adj.P.Val < 0.05 & top_table_annotated$logFC > 1  ~ "Upregulated",
+    top_table_annotated$adj.P.Val < 0.05 & top_table_annotated$logFC < -1 ~ "Downregulated",
+    TRUE ~ "Not Significant"
+  )
+  
+  # Save full DEG results
+  write.csv(
+    top_table_annotated,
+    file = file.path(results_dir, paste0(contrast_name, "_DEG_results.csv")),
+    row.names = FALSE
+  )
+  
+  # Label ALL significant up/downregulated genes
+  label_df <- top_table_annotated %>%
+    filter(adj.P.Val < 0.05 & (logFC > 1 | logFC < -1)) %>%
     arrange(adj.P.Val) %>%
-    filter(!is.na(gene_symbol) & gene_symbol != "") %>%
-    distinct(gene_symbol, .keep_all = TRUE) %>%
-    head(top_n)
+    head(30)
+  
+  
+  # Plot
+  p <- ggplot(top_table_annotated, aes(x = logFC, y = -log10(adj.P.Val), color = Expression)) +
+    geom_point(alpha = 0.8, size = 1.5) +
+    scale_color_manual(values = c(
+      "Upregulated" = "red",
+      "Downregulated" = "blue",
+      "Not Significant" = "grey"
+    )) +
+    geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+    labs(
+      title = paste("Volcano Plot:", contrast_name),
+      x = "Log2 Fold Change",
+      y = expression(-log[10](adjusted~P~value)),
+      color = "Expression"
+    ) +
+    theme_minimal(base_size = 14) +
+    geom_text_repel(
+      data = label_df,
+      aes(label = label),
+      size = 3,
+      max.overlaps = 100,
+      box.padding = 0.4,
+      point.padding = 0.3,
+      segment.color = "black"
+    )
+  
+  # Save plot
+  png(file.path(output_dir, paste0(contrast_name, "_volcano.png")), width = 2000, height = 1800, res = 300)
+  print(p)
+  dev.off()
 }
 
-# Apply to all timepoints
-top_genes_list <- lapply(all_results, extract_top_genes, top_n = 15)
-
-# Combine all and keep unique gene symbols
-top_genes <- bind_rows(top_genes_list) %>%
-  pull(gene_symbol) %>%
-  unique()
-
-#--------------------------
-# 2. Extract logFC for top genes across all timepoints
-#--------------------------
-
-# Build a matrix of logFC (rows = genes, cols = timepoints)
-heatmap_matrix <- do.call(cbind, lapply(all_results, function(df) {
-  df %>%
-    filter(gene_symbol %in% top_genes) %>%
-    select(gene_symbol, logFC) %>%
-    tibble::column_to_rownames("gene_symbol") %>%
-    arrange(match(rownames(.), top_genes))  # Preserve order
-})) 
-
-# Fix column names to match timepoints
-colnames(heatmap_matrix) <- names(all_results)
 
 
-#--------------------------
-# 3. Plot the Heatmap
-#--------------------------
-# Desired order of timepoints
-ordered_timepoints <- c("ZT00", "ZT03", "ZT06", "ZT09", "ZT12", "ZT15", "ZT18", "ZT21")
 
-# Reorder columns
-heatmap_matrix <- heatmap_matrix[, ordered_timepoints]
+#===============================================================================
+# Generate Heatmap for Each Timepoint
+#===============================================================================
 
-# Create and save the heatmap with adjusted cell size
-png("Top_genes_heatmap.png", width = 8, height = 12, units = "in", res = 300)
+library(pheatmap)
+library(dplyr)
+library(RColorBrewer)
 
+install.packages("RColorBrewer")
+
+# Load DEG CSV and gene_map
+deg_all <- read.csv("DEG_Female_vs_Male_by_Timepoint.csv")
+deg_all <- deg_all %>%
+  mutate(ensembl_gene_id = sub(".*\\.", "", X))  # Extract Ensembl ID
+
+# Join with gene_map to add gene symbols
+deg_annot <- left_join(deg_all, gene_map, by = "ensembl_gene_id")
+
+# Use gene symbol for labels; fall back to Ensembl if missing
+deg_annot <- deg_annot %>%
+  mutate(label = ifelse(is.na(mgi_symbol) | mgi_symbol == "", ensembl_gene_id, mgi_symbol))
+
+# Get top 15 DEGs per timepoint (adj.P.Val < 0.05)
+deg_top <- deg_annot %>%
+  filter(adj.P.Val < 0.05) %>%
+  group_by(Timepoint) %>%
+  arrange(adj.P.Val, .by_group = TRUE) %>%
+  slice_head(n = 10) %>%
+  ungroup()
+
+# Get unique top genes
+top_genes <- unique(deg_top$ensembl_gene_id)
+
+# Subset voom-normalized expression matrix
+expr_top <- v$E[rownames(v$E) %in% top_genes, ]
+
+# Match rownames to gene symbols
+gene_labels <- deg_top %>%
+  dplyr::select(ensembl_gene_id, label) %>%
+  distinct()
+
+
+rownames(expr_top) <- gene_labels$label[match(rownames(expr_top), gene_labels$ensembl_gene_id)]
+
+# Optional: scale per gene (z-score)
+expr_scaled <- t(scale(t(expr_top)))
+
+# Annotation for columns (samples)
+ann_colors <- list(Sex = c(Female = "firebrick", Male = "steelblue"))
+annot_col <- metadata %>%
+  dplyr::select(Sample_ID, Sex, Timepoint) %>%
+  filter(Sample_ID %in% colnames(expr_scaled)) %>%
+  tibble::column_to_rownames("Sample_ID")
+
+
+# Save heatmap
+output_dir <- "heatmaps"
+dir.create(output_dir, showWarnings = FALSE)
+
+heatmap_file <- file.path(output_dir, "Heatmap_Top10_DEGs_AllTimepoints.png")
+print(paste("Saving heatmap to:", heatmap_file))
+
+# Plot heatmap
+png("heatmaps/Heatmap_Top10_DEGs_AllTimepoints.png", width = 2200, height = 1600, res = 300)
 pheatmap(
-  heatmap_matrix,
+  expr_scaled,
   cluster_rows = TRUE,
   cluster_cols = TRUE,
-  scale = "row",
-  color = colorRampPalette(c("blue", "white", "red"))(100),
-  cellwidth = 20,     # width of each column (smaller = narrower boxes)
-  cellheight = 10,    # height of each row (larger = taller boxes)
-  fontsize_row = 7,
-  fontsize_col = 10,
-  main = "Top 15 DE Genes per Timepoint",
-  filename = "Top_genes_heatmap.png",
-  width = 8,          # in inches
-  height = 12         # increase if labels get cut off
-)
-
-#--------------------------
-# Save as PDF file
-#--------------------------
-
-pdf("Heatmap_top_genes_heatmap.pdf", width = 8, height = 12)
-
-pheatmap(
-  heatmap_matrix,
-  cluster_rows = TRUE,
-  cluster_cols = TRUE,
-  scale = "row",
-  color = colorRampPalette(c("blue", "white", "red"))(100),
-  cellwidth = 20,
-  cellheight = 10,
-  fontsize_row = 7,
-  fontsize_col = 10,
-  main = "Heatmap_Top 15 DE Genes per Timepoint"
+  annotation_col = annot_col,
+  annotation_colors = ann_colors,
+  color = colorRampPalette(c("navy", "white", "firebrick"))(100),
+  fontsize_row = 6,
+  fontsize_col = 6,
+  angle_col = 45,
+  main = "Top 10 DEGs at Each Timepoint: Female vs Male",
+  fontsize = 10
 )
 
 dev.off()
-  
 
-  
-  
-  
+
+
 #===============================================================================
-## GO Analysis: Top 15 DE Genes per Timepoint with Sex-specific Significance
-#===============================================================================  
+## HEATMAP: Top 15 DE Genes per Timepoint with Sex-specific Significance
+#===============================================================================
 
-if (!requireNamespace("clusterProfiler", quietly = TRUE)) {
-  BiocManager::install("clusterProfiler")
-}
-if (!requireNamespace("org.Mm.eg.db", quietly = TRUE)) {
-  BiocManager::install("org.Mm.eg.db")
-}
-if (!requireNamespace("enrichplot", quietly = TRUE)) {
-  BiocManager::install("enrichplot")
-}
-
-library(clusterProfiler)
-library(org.Mm.eg.db)
-library(enrichplot)
+library(pheatmap)
 library(dplyr)
+library(RColorBrewer)
+library(tibble)
 
+# Load DEG CSV and gene_map
+deg_all <- read.csv("DEG_Female_vs_Male_by_Timepoint.csv")
+deg_all <- deg_all %>%
+  mutate(ensembl_gene_id = sub(".*\\.", "", X))  # Extract Ensembl ID
 
-# Collect top genes from each timepoint
-top_genes <- lapply(all_results, function(df) {
-  # Extract gene IDs from rownames before converting to tibble
-  gene_ids <- rownames(df)
-  gene_ids <- sub("\\..*$", "", gene_ids)  # remove version numbers
-  
-  # Add as a column (without converting to tibble yet)
-  df$gene <- gene_ids
-  
-  df <- df %>%
-    filter(adj.P.Val < 0.05) %>%
-    arrange(adj.P.Val) %>%
-    head(100)  # or top 15
-  
-  return(df$gene)
-})
+# Join with gene_map to add gene symbols
+deg_annot <- left_join(deg_all, gene_map, by = "ensembl_gene_id")
 
-all_top_genes <- unique(unlist(top_genes))
-head(all_top_genes)  # should show "ENSMUSG..." IDs now
+# Use gene symbol for labels; fall back to Ensembl ID if missing
+deg_annot <- deg_annot %>%
+  mutate(label = ifelse(is.na(mgi_symbol) | mgi_symbol == "", ensembl_gene_id, mgi_symbol))
 
+# Get top 10 DEGs per timepoint (adj.P.Val < 0.05)
+deg_top <- deg_annot %>%
+  filter(adj.P.Val < 0.05) %>%
+  group_by(Timepoint) %>%
+  arrange(adj.P.Val, .by_group = TRUE) %>%
+  slice_head(n = 10) %>%
+  ungroup()
 
-library(clusterProfiler)
-library(org.Mm.eg.db)
+# Get unique top genes
+top_genes <- unique(deg_top$ensembl_gene_id)
 
-gene_df <- bitr(all_top_genes,
-                fromType = "ENSEMBL",
-                toType = "ENTREZID",
-                OrgDb = org.Mm.eg.db)
+# Subset voom-normalized expression matrix
+expr_top <- v$E[rownames(v$E) %in% top_genes, ]
 
+# Match rownames to gene symbols
+gene_labels <- deg_top %>%
+  dplyr::select(ensembl_gene_id, label) %>%
+  distinct()
+rownames(expr_top) <- gene_labels$label[match(rownames(expr_top), gene_labels$ensembl_gene_id)]
 
-# Convert Ensembl to Entrez
-gene_df <- bitr(all_top_genes,
-                fromType = "ENSEMBL",
-                toType = "ENTREZID",
-                OrgDb = org.Mm.eg.db)
+# Optional: scale per gene (z-score)
+expr_scaled <- t(scale(t(expr_top)))
 
+# Column annotation using metadata
+annot_col <- metadata %>%
+  dplyr::select(Sample_ID, Sex, Timepoint) %>%
+  filter(Sample_ID %in% colnames(expr_scaled)) %>%
+  tibble::column_to_rownames("Sample_ID")
 
-ego <- enrichGO(
-  gene = gene_df$ENTREZID,
-  OrgDb = org.Mm.eg.db,
-  keyType = "ENTREZID",
-  ont = "BP",  # Can be "BP", "MF", or "CC"
-  pAdjustMethod = "BH",
-  pvalueCutoff = 0.05,
-  qvalueCutoff = 0.2,
-  readable = TRUE
+# Update colnames to "Timepoint_SampleID" for cleaner display
+colnames(expr_scaled) <- paste0(annot_col[colnames(expr_scaled), "Timepoint"], "_", colnames(expr_scaled))
+
+# Define colors for annotation
+ann_colors <- list(
+  Sex = c(Female = "firebrick", Male = "steelblue"),
+  Timepoint = setNames(RColorBrewer::brewer.pal(length(unique(annot_col$Timepoint)), "Set3"),
+                       unique(annot_col$Timepoint))
 )
 
-# Bar plot
-barplot(ego, showCategory = 20, title = "GO Enrichment (BP)")
+# Match updated colnames back to annot_col
+annot_col <- annot_col[colnames(expr_scaled), , drop = FALSE]
+rownames(annot_col) <- colnames(expr_scaled)  # match to expr_scaled
 
-# Dot plot
-dotplot(ego, showCategory = 20, title = "GO Enrichment (BP)")
+# Create output directory
+output_dir <- "Heatmap"
+dir.create(output_dir, showWarnings = FALSE)
+
+# Save heatmap
+png(file.path(output_dir, "Heatmap_Top10_DEGs_AllTimepoints.png"), width = 1600, height = 1200, res = 300)
+
+pheatmap(
+  expr_scaled,
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  annotation_col = annot_col,
+  annotation_colors = ann_colors,
+  color = colorRampPalette(c("navy", "white", "firebrick"))(100),
+  fontsize_row = 9,
+  fontsize_col = 6,
+  angle_col = 45,
+  main = "Top 10 DEGs per Timepoint: Female vs Male"
+)
+
+dev.off()
 
 
-# Save results to CSV
-write.csv(as.data.frame(ego), "GO_enrichment_results.csv", row.names = FALSE)
+
+#===============================================================================
+#                         Generate UpSet Plot
+#===============================================================================
+
+# Load libraries
+install.packages("ComplexUpset")
+install.packages("ggplot2")  # needed for plotting
+
+library(ComplexUpset)
+library(ggplot2)
 
 
+# Define timepoints
+all_tp <- c("ZT00", "ZT03", "ZT06", "ZT09", "ZT12", "ZT15", "ZT18", "ZT21")
+
+# Basic UpSet plot
+upset_plot <- upset(
+  deg_df,
+  intersect = all_tp,
+  name = "DEG Timepoints",
+  base_annotations = list(
+    'Intersection size' = intersection_size(
+      text = list(size = 3)
+    )
+  ),
+  set_sizes = upset_set_size(),
+  sort_intersections_by = "cardinality",
+  n_intersections = 15,
+  min_size = 1,
+  width_ratio = 0.3,
+  themes = upset_modify_themes(list(
+    'intersect_size' = theme(text = element_text(size = 10)),
+    'overall_sizes' = theme(axis.text.y = element_text(size = 10)),
+    'intersections_matrix' = theme(axis.text.x = element_text(size = 8, angle = 90))
+  ))
+) +
+  labs(
+    title = "Top DEG Intersections Across Circadian Timepoints",
+    subtitle = NULL
+  )
+
+# Save to PNG
+ggsave("UpSet_DEGs_Top15_Basic.png", plot = upset_plot, width = 10, height = 6, dpi = 300)
 
 
+#===============================================================================
+#                           Generate GO Analysis
+#===============================================================================
+
+# Load required packages
+library(enrichR)
+library(dplyr)
+library(openxlsx)
+library(glue)
+library(ggplot2)
+library(viridis)
+
+# Set up Enrichr
+setEnrichrSite("Enrichr")
+enrichr_libraries <- c(
+  "GO_Biological_Process_2025",
+  "GO_Cellular_Component_2025",
+  "GO_Molecular_Function_2025",
+  "KEGG_2021_Human",
+  "Panther_2016",
+  "Reactome_2022",
+  "SynGO_2022"
+)
+
+# Create output folder
+dir.create("EnrichR", showWarnings = FALSE)
+
+female_vs_male_timepoints_results <- read_csv("female_vs_male_timepoints_results.csv")
 
 
+genes <- unique(na.omit(female_vs_male_timepoints_results$gene_symbol))
+message("Number of genes for enrichment: ", length(genes))
 
+# Run enrichment
+results <- enrichr(genes, enrichr_libraries)
 
+# Save results to Excel
+wb <- createWorkbook()
+for (lib in names(results)) {
+  df <- results[[lib]]
+  addWorksheet(wb, lib)
+  writeData(wb, lib, df)
+}
+saveWorkbook(wb, file = "EnrichR/Allgenes_Enrichr_Results.xlsx", overwrite = TRUE)
+
+# Plot top 25 terms for each library
+for (lib in names(results)) {
+  df <- results[[lib]] %>%
+    arrange(P.value) %>%
+    head(25)
   
-  
-#======================Generate MDS plot Sex:Timepoint==========================
+  if (nrow(df) > 0) {
+    p <- ggplot(df, aes(x = reorder(Term, -log10(P.value)), y = -log10(P.value))) +
+      geom_col(fill = "steelblue") +
+      coord_flip() +
+      labs(title = paste("Top 25 Terms -", lib),
+           x = "", y = "-log10(P-value)") +
+      theme_minimal(base_size = 10)
+    
+    ggsave(filename = file.path("EnrichR", paste0("AllDMRs_", gsub("[^A-Za-z0-9]", "_", lib), ".pdf")),
+           plot = p, width = 10, height = 6)
+  }
+}
+
+
+
+#===============================================================================
+#                 Generate MDS plot Sex:Timepoint
+#===============================================================================
+
 mds <- plotMDS(d, 
                col = ifelse(metadata$Sex == "Male", "blue", "pink"),  # Colors by sex
                pch = ifelse(metadata$Timepoint == 0, 16,               # Shapes by timepoint
@@ -490,12 +511,3 @@ ggplot(mds_data, aes(Dim1, Dim2, color = Sex)) +
     axis.line = element_line(color = "black")  # Keep axis lines
   )
 
-
-
-  
-  
-  
-  
-  
-  
-  
