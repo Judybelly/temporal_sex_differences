@@ -400,6 +400,10 @@ ggsave("UpSet_DEGs_Top15_Basic.png", plot = upset_plot, width = 10, height = 6, 
 #                           Generate GO Analysis
 #===============================================================================
 
+#===============================================================================
+#                           Generate GO Analysis (Significant DEGs Only)
+#===============================================================================
+
 # Load required packages
 library(enrichR)
 library(dplyr)
@@ -407,6 +411,7 @@ library(openxlsx)
 library(glue)
 library(ggplot2)
 library(viridis)
+library(readr)
 
 # Set up Enrichr
 setEnrichrSite("Enrichr")
@@ -423,11 +428,17 @@ enrichr_libraries <- c(
 # Create output folder
 dir.create("EnrichR", showWarnings = FALSE)
 
+# Load differential expression results
 female_vs_male_timepoints_results <- read_csv("female_vs_male_timepoints_results.csv")
 
+# Filter for significant DEGs: FDR < 0.05 and abs(logFC) > 1
+sig_DEGs <- female_vs_male_timepoints_results %>%
+  filter(adj.P.Val < 0.05, abs(logFC) > 1) %>%
+  distinct(gene_symbol) %>%
+  drop_na()
 
-genes <- unique(na.omit(female_vs_male_timepoints_results$gene_symbol))
-message("Number of genes for enrichment: ", length(genes))
+genes <- sig_DEGs$gene_symbol
+message("Number of significant DEGs for enrichment: ", length(genes))
 
 # Run enrichment
 results <- enrichr(genes, enrichr_libraries)
@@ -439,9 +450,9 @@ for (lib in names(results)) {
   addWorksheet(wb, lib)
   writeData(wb, lib, df)
 }
-saveWorkbook(wb, file = "EnrichR/Allgenes_Enrichr_Results.xlsx", overwrite = TRUE)
+saveWorkbook(wb, file = "EnrichR/Significant_DEGs_Enrichr_Results.xlsx", overwrite = TRUE)
 
-# Plot top 25 terms for each library
+# Plot top 25 enriched terms for each library
 for (lib in names(results)) {
   df <- results[[lib]] %>%
     arrange(P.value) %>%
@@ -451,14 +462,17 @@ for (lib in names(results)) {
     p <- ggplot(df, aes(x = reorder(Term, -log10(P.value)), y = -log10(P.value))) +
       geom_col(fill = "steelblue") +
       coord_flip() +
-      labs(title = paste("Top 25 Terms -", lib),
-           x = "", y = "-log10(P-value)") +
+      labs(
+        title = paste("Top 25 Terms -", lib),
+        x = "", y = "-log10(P-value)"
+      ) +
       theme_minimal(base_size = 10)
     
-    ggsave(filename = file.path("EnrichR", paste0("AllDMRs_", gsub("[^A-Za-z0-9]", "_", lib), ".pdf")),
+    ggsave(filename = file.path("EnrichR", paste0("GOPlot_", gsub("[^A-Za-z0-9]", "_", lib), ".pdf")),
            plot = p, width = 10, height = 6)
   }
 }
+
 
 
 
