@@ -244,18 +244,18 @@ heatmap_file <- file.path(output_dir, "Heatmap_Top10_DEGs_AllTimepoints.png")
 print(paste("Saving heatmap to:", heatmap_file))
 
 # Plot heatmap
-png("heatmaps/Heatmap_Top10_DEGs_AllTimepoints.png", width = 2200, height = 1600, res = 300)
+png("heatmaps/Heatmap_DEGs_AllTimepoints.png", width = 2200, height = 1600, res = 300)
 pheatmap(
   expr_scaled,
-  cluster_rows = TRUE,
-  cluster_cols = TRUE,
+  cluster_rows = FALSE,
+  cluster_cols = FALSE,
   annotation_col = annot_col,
   annotation_colors = ann_colors,
   color = colorRampPalette(c("navy", "white", "firebrick"))(100),
   fontsize_row = 6,
   fontsize_col = 6,
   angle_col = 45,
-  main = "Top 10 DEGs at Each Timepoint: Female vs Male",
+  main = "Top DEGs at Each Timepoint: Female vs Male",
   fontsize = 10
 )
 
@@ -344,11 +344,64 @@ pheatmap(
   fontsize_row = 9,
   fontsize_col = 6,
   angle_col = 45,
-  main = "Top 10 DEGs per Timepoint: Female vs Male"
+  main = "Top DEGs per Timepoint: Female vs Male"
 )
 
 dev.off()
 
+
+#===============================================================================
+#              Line graph of the Top 10 genes across timepoints
+#===============================================================================
+
+# Load required packages
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(ggforce)  # For pagination
+
+# Read data and select genes
+data <- read.csv("Heatmap_Top_DEGs_logFC_matrix.csv", row.names = 1)
+specific_genes <- c("Uty", "Ddxy3", "Kdm5d", "Eif2s3y", "Xist", "Eif2s3x", "Kdm6a", "Ypel2", "Ctxn3")  # Your genes
+
+# Reshape data
+data_long <- data %>%
+  filter(rownames(.) %in% specific_genes) %>%
+  mutate(Gene = factor(rownames(.))) %>%  # Ensure proper ordering
+  pivot_longer(cols = -Gene, names_to = "Timepoint", values_to = "logFC")
+
+# Order timepoints
+data_long$Timepoint <- factor(data_long$Timepoint, levels = paste0("ZT", sprintf("%02d", seq(0, 21, 3))))
+
+# Create a function to plot in batches
+plot_genes_paginated <- function(data, ncol = 3, nrow = 2, per_page = ncol * nrow) {
+  n_pages <- ceiling(length(unique(data$Gene)) / per_page)
+  
+  for (i in 1:n_pages) {
+    p <- ggplot(data, aes(x = Timepoint, y = logFC, group = Gene, color = Gene)) +
+      geom_line(linewidth = 1) +
+      geom_point(size = 2) +
+      ggforce::facet_wrap_paginate(~ Gene, ncol = ncol, nrow = nrow, page = i) +
+      scale_y_continuous(limits = c(-10, 15), breaks = seq(-10, 15, by = 5)) +
+      labs(title = paste("Selected DEGs - Page", i), x = "Timepoint", y = "log2 Fold Change") +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+            plot.title = element_text(hjust = 0.5, face = "bold"),
+            strip.background = element_rect(fill = "lightgray"))
+    
+    ggsave(
+      filename = paste0("Selected_Genes_Page_", i, ".pdf"),
+      plot = p,
+      device = "pdf",
+      width = 10,
+      height = 7,
+      dpi = 300
+    )
+  }
+}
+
+# Run the function (adjust nrow/ncol as needed)
+plot_genes_paginated(data_long, ncol = 3, nrow = 2)  # 6 genes per page (3 columns x 2 rows)
 
 
 #===============================================================================
@@ -396,82 +449,78 @@ upset_plot <- upset(
 ggsave("UpSet_DEGs_Top15_Basic.png", plot = upset_plot, width = 10, height = 6, dpi = 300)
 
 
+
+
+
+
 #===============================================================================
 #                           Generate GO Analysis
 #===============================================================================
 
-#===============================================================================
-#                           Generate GO Analysis (Significant DEGs Only)
-#===============================================================================
-
 # Load required packages
-library(enrichR)
-library(dplyr)
-library(openxlsx)
-library(glue)
+library(clusterProfiler)
+library(org.Mm.eg.db) # For mouse genes (change if different organism)
+library(enrichplot)
 library(ggplot2)
-library(viridis)
-library(readr)
+library(dplyr)
 
-# Set up Enrichr
-setEnrichrSite("Enrichr")
-enrichr_libraries <- c(
-  "GO_Biological_Process_2025",
-  "GO_Cellular_Component_2025",
-  "GO_Molecular_Function_2025",
-  "KEGG_2021_Human",
-  "Panther_2016",
-  "Reactome_2022",
-  "SynGO_2022"
+# 1. Prepare significant genes from your DEG data
+sig_genes <- deg_annot %>%
+  filter(adj.P.Val < 0.05 & abs(logFC) > 1) %>% # Adjust thresholds as needed
+  pull(ensembl_gene_id) %>%
+  unique()
+
+# 2. Convert ENSEMBL IDs to ENTREZID
+gene_list <- bitr(sig_genes, 
+                  fromType = "ENSEMBL",
+                  toType = "ENTREZID",
+                  OrgDb = org.Mm.eg.db)
+
+# 3. Perform KEGG enrichment
+kegg_enrich <- enrichKEGG(
+  gene = gene_list$ENTREZID,
+  organism = "mmu", # "mmu" for mouse, "hsa" for human
+  pvalueCutoff = 0.05,
+  pAdjustMethod = "BH",
+  qvalueCutoff = 0.2
 )
 
-# Create output folder
-dir.create("EnrichR", showWarnings = FALSE)
+# Simplify redundant terms
+kegg_enrich <- clusterProfiler::simplify(kegg_enrich)
 
-# Load differential expression results
-female_vs_male_timepoints_results <- read_csv("female_vs_male_timepoints_results.csv")
+# 4. Visualize results (multiple options - choose your preferred one)
 
-# Filter for significant DEGs: FDR < 0.05 and abs(logFC) > 1
-sig_DEGs <- female_vs_male_timepoints_results %>%
-  filter(adj.P.Val < 0.05, abs(logFC) > 1) %>%
-  distinct(gene_symbol) %>%
-  drop_na()
+# Option A: Dot plot
+dot_plot <- dotplot(kegg_enrich, showCategory = 20) +
+  ggtitle("KEGG Pathway Enrichment") +
+  theme(axis.text.y = element_text(size = 8))
 
-genes <- sig_DEGs$gene_symbol
-message("Number of significant DEGs for enrichment: ", length(genes))
+# Option B: Bar plot
+bar_plot <- barplot(kegg_enrich, showCategory = 15) +
+  ggtitle("KEGG Pathway Enrichment") +
+  xlab("Gene Count") +
+  theme(axis.text.y = element_text(size = 8))
 
-# Run enrichment
-results <- enrichr(genes, enrichr_libraries)
+# Option C: Enrichment Map
+enrich_map <- emapplot(pairwise_termsim(kegg_enrich), showCategory = 20)
 
-# Save results to Excel
-wb <- createWorkbook()
-for (lib in names(results)) {
-  df <- results[[lib]]
-  addWorksheet(wb, lib)
-  writeData(wb, lib, df)
-}
-saveWorkbook(wb, file = "EnrichR/Significant_DEGs_Enrichr_Results.xlsx", overwrite = TRUE)
+# Option D: Pathway-specific visualization (example)
+# First check available pathways:
+View(kegg_enrich@result)
+# Then visualize specific pathway (example with mmu05200 - Cancer pathways)
+# browseKEGG(kegg_enrich, "mmu05200") # Uncomment to view in browser
 
-# Plot top 25 enriched terms for each library
-for (lib in names(results)) {
-  df <- results[[lib]] %>%
-    arrange(P.value) %>%
-    head(25)
-  
-  if (nrow(df) > 0) {
-    p <- ggplot(df, aes(x = reorder(Term, -log10(P.value)), y = -log10(P.value))) +
-      geom_col(fill = "steelblue") +
-      coord_flip() +
-      labs(
-        title = paste("Top 25 Terms -", lib),
-        x = "", y = "-log10(P-value)"
-      ) +
-      theme_minimal(base_size = 10)
-    
-    ggsave(filename = file.path("EnrichR", paste0("GOPlot_", gsub("[^A-Za-z0-9]", "_", lib), ".pdf")),
-           plot = p, width = 10, height = 6)
-  }
-}
+# 5. Save plots
+ggsave("KEGG_dotplot.png", plot = dot_plot, width = 10, height = 8, dpi = 300)
+ggsave("KEGG_barplot.png", plot = bar_plot, width = 10, height = 8, dpi = 300)
+ggsave("KEGG_enrichmap.png", plot = enrich_map, width = 12, height = 10, dpi = 300)
+
+# Show one of the plots
+print(dot_plot)
+
+
+
+
 
 
 
