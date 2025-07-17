@@ -362,7 +362,7 @@ library(ggforce)  # For pagination
 
 # Read data and select genes
 data <- read.csv("Heatmap_Top_DEGs_logFC_matrix.csv", row.names = 1)
-specific_genes <- c("Uty", "Ddxy3", "Kdm5d", "Eif2s3y", "Xist", "Eif2s3x", "Kdm6a", "Ypel2", "Ctxn3")  # Your genes
+specific_genes <- c("Uty", "Ddx3y", "Kdm5d", "Eif2s3y", "Xist", "Eif2s3x", "Kdm6a", "Glp2r")  # Your genes
 
 # Reshape data
 data_long <- data %>%
@@ -383,11 +383,11 @@ plot_genes_paginated <- function(data, ncol = 3, nrow = 2, per_page = ncol * nro
       geom_point(size = 2) +
       ggforce::facet_wrap_paginate(~ Gene, ncol = ncol, nrow = nrow, page = i) +
       scale_y_continuous(limits = c(-10, 15), breaks = seq(-10, 15, by = 5)) +
-      labs(title = paste("Selected DEGs - Page", i), x = "Timepoint", y = "log2 Fold Change") +
+      labs(title = paste("Changes in Gene Expression per Timepoint", i), x = "Timepoint", y = "log2 Fold Change") +
       theme_minimal() +
       theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
             plot.title = element_text(hjust = 0.5, face = "bold"),
-            strip.background = element_rect(fill = "lightgray"))
+            strip.background = element_rect(fill = "lightgrey"))
     
     ggsave(
       filename = paste0("Selected_Genes_Page_", i, ".pdf"),
